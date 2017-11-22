@@ -1,4 +1,4 @@
-PyDPGM - Python implementation of Dirichlet process mixture model
+PyDPGM
 ==========
 
 PyDPGM is a Dirichlet Process Gaussian Mixture package, please download the latest version from our [GitHub repository](https://github.com/kzhai/PyDPGM).
