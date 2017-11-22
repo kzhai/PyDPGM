@@ -44,13 +44,9 @@ Additional Scripts
 
 To generate synthetic data
 
-	python -m generate_data_crp --output_directory=./ --number_of_clusters=5 --number_of_points=1000
-	#python -m generate_data_sbp --output_directory=./ --number_of_clusters=5 --number_of_points=1000
-
-To inference
-
-	python -m launch_train --input_directory=../input/140611-175134-c5-p1000-d2 --output_directory=../output/ --training_iterations=100 --snapshot_interval=10
+	python generate_data_crp.py --output_directory=./ --number_of_clusters=5 --number_of_points=1000
+	#python generate_data_sbp.py --output_directory=./ --number_of_clusters=5 --number_of_points=1000
 
 To plot result
 
-	python plot_clusters.py --input_directory=./point-clusters --output_directory=./point-clusters/171121-223249-dpgm-I100-S100-aa1
+	python plot_clusters.py --input_directory=./point-clusters/ --output_directory=./point-clusters/

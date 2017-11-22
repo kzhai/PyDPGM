@@ -100,7 +100,7 @@ def main():
 	output_directory = output_directory.rstrip("/")
 	# output_directory_parent = os.path.dirname(output_directory)
 	# output_directory_parent = output_directory_parent.rstrip("/")
-	assert os.path.basename(output_directory) == dataset_name, (output_directory, output_directory, dataset_name)
+	#assert os.path.basename(output_directory) == dataset_name, (output_directory, os.path.basename(output_directory), dataset_name)
 	snapshot_index = options.snapshot_index
 
 	for model_name in os.listdir(output_directory):
