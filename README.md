@@ -5,12 +5,92 @@ PyDPGM is a Dirichlet Process Gaussian Mixture package, please download the late
 
 Please send any bugs of problems to Ke Zhai (kzhai@umd.edu).
 
+## Quick Start with Consolidated API
+
+The package now includes a high-level consolidated API via `dpgm.py` that provides a simple interface for clustering.
+
+### Basic Usage
+
+```python
+import numpy as np
+from dpgm import fit_dpgm
+
+# Your data: N x M array (N points with M features)
+data = np.random.randn(300, 2)
+
+# Fit the model
+results = fit_dpgm(
+    data,
+    alpha_alpha=1.0,          # Concentration parameter (higher = more clusters)
+    training_iterations=100,   # Number of iterations
+    verbose=True
+)
+
+# Get results
+print("Number of clusters:", results['n_clusters'])
+print("Cluster assignments:", results['labels'])
+print("Cluster means:", results['cluster_means'])
+print("Cluster counts:", results['cluster_counts'])
+```
+
+### Command Line Usage
+
+Run the example script:
+```bash
+python dpgm.py
+```
+
+Or cluster data from a file:
+```bash
+python dpgm.py path/to/data.dat
+```
+
+This will create a `data_labels.dat` file with the cluster assignments.
+
+### API Functions
+
+#### `fit_dpgm(data, alpha_alpha=1.0, training_iterations=100, ...)`
+
+Fit a Dirichlet Process Gaussian Mixture Model to the data.
+
+**Parameters:**
+- `data`: numpy.ndarray (N x M) - N points with M features
+- `alpha_alpha`: float (default=1.0) - Concentration parameter for Dirichlet process
+- `training_iterations`: int (default=100) - Number of training iterations
+- `split_merge_heuristics`: int (default=-1) - Split-merge strategy
+  - -1: no split-merge operation
+  - 0: component resampling
+  - 1-3: various heuristics
+- `verbose`: bool (default=True) - Print progress information
+
+**Returns:** Dictionary containing:
+- `labels`: Cluster assignments for each point
+- `n_clusters`: Number of clusters found
+- `cluster_means`: Cluster centers
+- `cluster_counts`: Number of points in each cluster
+- `log_likelihood`: Final log-likelihood value
+- `model`: Trained model object
+
+#### `predict_dpgm(model, data)`
+
+Predict cluster assignments for new data points.
+
+**Parameters:**
+- `model`: Trained model or results dictionary from fit_dpgm
+- `data`: numpy.ndarray (N x M) - New data points
+
+**Returns:** numpy.ndarray - Cluster assignments
+
 Install and Build
 ----------
 
 This package depends on many external python libraries, such as numpy, scipy and nltk.
 
-Launch and Execute
+```bash
+pip install numpy scipy
+```
+
+Launch and Execute (Original Interface)
 ----------
 
 Assume the PyDPGM package is downloaded under directory ```$PROJECT_SPACE/src/```, i.e.,

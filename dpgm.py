@@ -151,7 +151,8 @@ def predict_dpgm(model, data):
         raise ValueError("Data must be a 2D array (N x M)")
     
     # Use the inference method to predict labels
-    predictions = model.inference(data)
+    # The inference method returns (labels, log_likelihood)
+    predictions, log_likelihood = model.inference(data)
     
     return predictions
 
