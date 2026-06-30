@@ -133,7 +133,7 @@ class MonteCarlo(object):
 
 		# compute the sum and square sum of all cluster up to truncation level
 		self._sum = numpy.zeros((self._K, self._D))
-		for cluster_index in range(self._K):
+		for cluster_index in xrange(self._K):
 			point_indices = numpy.nonzero(self._label == (cluster_index))[0]
 			self._sum[cluster_index, :] = numpy.sum(self._X[point_indices, :], 0)
 
@@ -162,8 +162,8 @@ class MonteCarlo(object):
 		# compact all the parameters, including removing unused topics and unused tables
 		# self.compact_params()
 
-		print("accumulated number of points for each cluster:", "[", " ".join("%d" % x for x in self._count), "]")
-		# print("accumulated number of tokens:", numpy.sum(self._n_kv, axis=1)[:, numpy.newaxis].T)
+		print "accumulated number of points for each cluster:", "[", " ".join("%d" % x for x in self._count), "]"
+		# print "accumulated number of tokens:", numpy.sum(self._n_kv, axis=1)[:, numpy.newaxis].T
 
 		return self.log_posterior()
 
@@ -173,7 +173,7 @@ class MonteCarlo(object):
 
 	def sample_cgs(self):
 		# sample the total data
-		for point_index in numpy.random.permutation(range(self._N)):
+		for point_index in numpy.random.permutation(xrange(self._N)):
 			assert self._count.shape == (self._K,)
 			assert self._sum.shape == (self._K, self._D)
 			assert self._mu.shape == (self._K, self._D)
@@ -231,20 +231,20 @@ class MonteCarlo(object):
 
 			cluster_log_likelihood[self._K] = -0.5 * self._log_sigma_det_0
 			cluster_log_likelihood[self._K] += -0.5 * numpy.dot(numpy.dot(mean_offset, self._sigma_inv_0),
-			                                                    mean_offset.T).item()
+			                                                    mean_offset.T)
 
 			# compute the likelihood for the existing clusters
-			for k in range(self._K):
+			for k in xrange(self._K):
 				mean_offset = self._X[[point_index], :] - self._mu[[k], :]
 				assert mean_offset.shape == (1, self._D)
 
 				cluster_log_likelihood[k] = -0.5 * self._log_sigma_det[k]
 				cluster_log_likelihood[k] += -0.5 * numpy.dot(numpy.dot(mean_offset, self._sigma_inv[k, :, :]),
-				                                              mean_offset.T).item()
+				                                              mean_offset.T)
 
 			# normalize the posterior distribution
 			cluster_log_posterior = cluster_log_prior + cluster_log_likelihood
-			cluster_log_posterior -= scipy.special.logsumexp(cluster_log_posterior)
+			cluster_log_posterior -= scipy.misc.logsumexp(cluster_log_posterior)
 			cluster_posterior = numpy.exp(cluster_log_posterior)
 
 			# sample a new cluster label for current point 
@@ -302,25 +302,25 @@ class MonteCarlo(object):
 
 		# compute the prior of being in any of the clusters        
 		cluster_log_prior = numpy.log(self._count + self._alpha_alpha)
-		cluster_log_prior -= scipy.special.logsumexp(cluster_log_prior)
+		cluster_log_prior -= scipy.misc.logsumexp(cluster_log_prior)
 
 		# sample the entire dataset
-		for point_index in numpy.random.permutation(range(N)):
+		for point_index in numpy.random.permutation(xrange(N)):
 			# initialize the likelihood vector for all clusters
 			cluster_log_likelihood = numpy.zeros(self._K)
 
 			# compute the likelihood for the existing clusters
-			for k in range(self._K):
+			for k in xrange(self._K):
 				mean_offset = X_prime[[point_index], :] - self._mu[[k], :]
 				assert mean_offset.shape == (1, self._D)
 
 				cluster_log_likelihood[k] = -0.5 * self._log_sigma_det[k]
 				cluster_log_likelihood[k] += -0.5 * numpy.dot(numpy.dot(mean_offset, self._sigma_inv[k, :, :]),
-				                                              mean_offset.T).item()
+				                                              mean_offset.T)
 
 			# normalize the posterior distribution
 			cluster_log_posterior = cluster_log_prior + cluster_log_likelihood
-			cluster_log_posterior -= scipy.special.logsumexp(cluster_log_posterior)
+			cluster_log_posterior -= scipy.misc.logsumexp(cluster_log_posterior)
 			cluster_posterior = numpy.exp(cluster_log_posterior)
 
 			# sample a new cluster label for current point
@@ -344,7 +344,7 @@ class MonteCarlo(object):
 	                             hyperparameter_maximum_iteration=10):
 		old_log_alpha_alpha = numpy.log(self._alpha_alpha)
 
-		for ii in range(hyperparameter_samples):
+		for ii in xrange(hyperparameter_samples):
 			log_likelihood_old = self.log_posterior()
 			log_likelihood_new = numpy.log(numpy.random.random()) + log_likelihood_old
 			# print("OLD: %f\tNEW: %f at (%f, %f)" % (log_likelihood_old, log_likelihood_new, self._alpha, self._beta))
@@ -352,7 +352,7 @@ class MonteCarlo(object):
 			l = old_log_alpha_alpha - numpy.random.random() * hyperparameter_step_size
 			r = old_log_alpha_alpha + hyperparameter_step_size
 
-			for jj in range(hyperparameter_maximum_iteration):
+			for jj in xrange(hyperparameter_maximum_iteration):
 				new_log_alpha_alpha = l + numpy.random.random() * (r - l)
 				lp_test = self.log_posterior(None, numpy.exp(new_log_alpha_alpha))
 
@@ -368,10 +368,10 @@ class MonteCarlo(object):
 					assert l <= old_log_alpha_alpha
 					assert r >= old_log_alpha_alpha
 
-			print("update hyperparameter to %f") % (numpy.exp(new_log_alpha_alpha))
+			print "update hyperparameter to %f" % (numpy.exp(new_log_alpha_alpha))
 
 	def split_merge(self):
-		for iteration in range(self._split_merge_iteration):
+		for iteration in xrange(self._split_merge_iteration):
 			label_probability = 1.0 * self._count / numpy.sum(self._count)
 
 			if self._split_merge_heuristics == 1:
@@ -402,7 +402,7 @@ class MonteCarlo(object):
 		if self._split_merge_heuristics==0:
 			return
 		
-		for iteration in range(self._split_merge_iteration):
+		for iteration in xrange(self._split_merge_iteration):
 			label_probability = 1.0 * self._count / numpy.sum(self._count)
 			cluster_index = numpy.random.randint(0, self._K)
 			
@@ -553,14 +553,14 @@ class MonteCarlo(object):
 		new_log_posterior = self.log_posterior(model_parameter)
 
 		acceptance_log_probability = log_proposal_probability + new_log_posterior - old_log_posterior
-		acceptance_log_probability -= scipy.special.logsumexp(acceptance_log_probability)
+		acceptance_log_probability -= scipy.misc.logsumexp(acceptance_log_probability)
 		acceptance_probability = numpy.exp(acceptance_log_probability)
 
 		(proposed_label, proposed_K, proposed_count, proposed_mu, proposed_sum, proposed_log_sigma_det,
 		 proposed_sigma_inv) = model_parameter
 
 		if numpy.random.random() < acceptance_probability:
-			print("split operation granted from %s to %s with acceptance probability %s") % (
+			print "split operation granted from %s to %s with acceptance probability %s" % (
 				self._count, proposed_count, acceptance_probability)
 
 			self._K = proposed_K
@@ -676,7 +676,7 @@ class MonteCarlo(object):
 			assert mean_offset.shape == (1, self._D)
 			cluster_log_probability_1 = -0.5 * proposed_log_sigma_det[cluster_label]
 			cluster_log_probability_1 += -0.5 * numpy.dot(
-				numpy.dot(mean_offset, proposed_sigma_inv[cluster_label, :, :]), mean_offset.T).item()
+				numpy.dot(mean_offset, proposed_sigma_inv[cluster_label, :, :]), mean_offset.T)
 			cluster_log_probability_1 += numpy.log(proposed_count[cluster_label])
 
 			# compute the probability of being in cluster 2
@@ -684,11 +684,11 @@ class MonteCarlo(object):
 			assert mean_offset.shape == (1, self._D)
 			cluster_log_probability_2 = -0.5 * proposed_log_sigma_det[proposed_K - 1]
 			cluster_log_probability_2 += -0.5 * numpy.dot(
-				numpy.dot(mean_offset, proposed_sigma_inv[proposed_K - 1, :, :]), mean_offset.T).item()
+				numpy.dot(mean_offset, proposed_sigma_inv[proposed_K - 1, :, :]), mean_offset.T)
 			cluster_log_probability_2 += numpy.log(proposed_count[proposed_K - 1])
 
 			log_ratio_2_over_1 = cluster_log_probability_2 - cluster_log_probability_1
-			log_ratio_2_over_1 -= scipy.special.logsumexp(log_ratio_2_over_1)
+			log_ratio_2_over_1 -= scipy.misc.logsumexp(log_ratio_2_over_1)
 			ratio_2_over_1 = numpy.exp(log_ratio_2_over_1)
 
 			# sample a new cluster label for current point
@@ -734,7 +734,7 @@ class MonteCarlo(object):
 			len(data_point_indices), proposed_count[cluster_index_1], proposed_count[cluster_index_2])
 
 		# sample the data points set
-		for restrict_gibbs_sampling_iteration_index in range(restricted_gibbs_sampling_iteration):
+		for restrict_gibbs_sampling_iteration_index in xrange(restricted_gibbs_sampling_iteration):
 			transition_log_likelihood = 0
 			for point_index in data_point_indices:
 				# get the old label of current point
@@ -770,7 +770,7 @@ class MonteCarlo(object):
 				assert mean_offset.shape == (1, self._D)
 				cluster_log_probability_1 = -0.5 * proposed_log_sigma_det[cluster_index_1]
 				cluster_log_probability_1 += -0.5 * numpy.dot(
-					numpy.dot(mean_offset, proposed_sigma_inv[cluster_index_1, :, :]), mean_offset.T).item()
+					numpy.dot(mean_offset, proposed_sigma_inv[cluster_index_1, :, :]), mean_offset.T)
 				if proposed_count[cluster_index_1] == 0:
 					cluster_log_probability_1 += numpy.log(self._alpha_alpha)
 				else:
@@ -781,7 +781,7 @@ class MonteCarlo(object):
 				assert mean_offset.shape == (1, self._D)
 				cluster_log_probability_2 = -0.5 * proposed_log_sigma_det[cluster_index_2]
 				cluster_log_probability_2 += -0.5 * numpy.dot(
-					numpy.dot(mean_offset, proposed_sigma_inv[cluster_index_2, :, :]), mean_offset.T).item()
+					numpy.dot(mean_offset, proposed_sigma_inv[cluster_index_2, :, :]), mean_offset.T)
 				if proposed_count[cluster_index_2] == 0:
 					cluster_log_probability_2 += numpy.log(self._alpha_alpha)
 				else:
@@ -873,7 +873,7 @@ class MonteCarlo(object):
 			assert numpy.sum(self._count) == self._N
 
 			if proposed_count[cluster_label_1] == 0 or proposed_count[cluster_label_2] == 0:
-				print("merge cluster %d and %d during restricted gibbs sampling step...") % (
+				print "merge cluster %d and %d during restricted gibbs sampling step..." % (
 					cluster_label_1, cluster_label_2)
 
 				if proposed_count[cluster_label_1] == 0:
@@ -909,7 +909,7 @@ class MonteCarlo(object):
 			# perform gibbs sampling for merge proposal
 			cluster_log_probability = numpy.log(proposed_count)
 			cluster_log_probability = numpy.sum(cluster_log_probability) - cluster_log_probability
-			cluster_log_probability -= scipy.special.logsumexp(cluster_log_probability)
+			cluster_log_probability -= scipy.misc.logsumexp(cluster_log_probability)
 			cluster_probability = numpy.exp(cluster_log_probability)
 
 			# choose a cluster that is inverse proportional to its size
@@ -953,7 +953,7 @@ class MonteCarlo(object):
 		new_log_posterior = self.log_posterior(model_parameter)
 
 		acceptance_log_probability = log_proposal_probability + new_log_posterior - old_log_posterior
-		acceptance_log_probability -= scipy.special.logsumexp(acceptance_log_probability)
+		acceptance_log_probability -= scipy.misc.logsumexp(acceptance_log_probability)
 		acceptance_probability = numpy.exp(acceptance_log_probability)
 
 		(proposed_label, proposed_K, proposed_count, proposed_mu, proposed_sum, proposed_log_sigma_det,
@@ -961,7 +961,7 @@ class MonteCarlo(object):
 		assert numpy.all(proposed_count > 0)
 
 		if numpy.random.random() < acceptance_probability:
-			print("merge operation granted from %s to %s with acceptance probability %s") % (
+			print "merge operation granted from %s to %s with acceptance probability %s" % (
 				self._count, proposed_count, acceptance_probability)
 
 			self._K = proposed_K
@@ -1092,7 +1092,7 @@ class MonteCarlo(object):
 
 		# log likelihood probability
 		log_likelihood = 0.
-		for n in range(self._N):
+		for n in xrange(self._N):
 			log_likelihood -= 0.5 * self._D * numpy.log(2.0 * numpy.pi) + 0.5 * log_sigma_det[label[n]]
 			mean_offset = self._X[n, :][numpy.newaxis, :] - mu[label[n], :]
 			assert (mean_offset.shape == (1, self._D))
@@ -1129,7 +1129,7 @@ class MonteCarlo(object):
 
 		# log likelihood probability
 		log_likelihood = 0.
-		for n in range(self._N):
+		for n in xrange(self._N):
 			log_likelihood -= 0.5 * self._D * numpy.log(2.0 * numpy.pi) + 0.5 * log_sigma_det[label[n]]
 			mean_offset = self._X[n, :][numpy.newaxis, :] - mu[label[n], :]
 			assert (mean_offset.shape == (1, self._D))
@@ -1199,7 +1199,7 @@ class MonteCarlo(object):
 		cluster_log_likelihood = numpy.zeros(proposed_K)
 
 		# compute the likelihood for the existing clusters
-		for k in range(proposed_K):
+		for k in xrange(proposed_K):
 			if self._count[k] == 0:
 				cluster_log_likelihood[k] = negative_infinity
 				continue
@@ -1211,18 +1211,18 @@ class MonteCarlo(object):
 
 				cluster_log_likelihood[cluster_label] = -0.5 * proposed_count[cluster_label] * self._log_sigma_det_0
 				cluster_log_likelihood[cluster_label] += -0.5 * numpy.sum(
-					numpy.dot(numpy.dot(mean_offset, self._sigma_inv_0), mean_offset.T).item())
+					numpy.dot(numpy.dot(mean_offset, self._sigma_inv_0), mean_offset.T))
 			else:
 				mean_offset = self._X[data_point_indices, :] - proposed_mu[[k], :]
 				assert mean_offset.shape == (proposed_count[cluster_label], self._D)
 
 				cluster_log_likelihood[k] = -0.5 * proposed_count[cluster_label] * proposed_log_sigma_det[k]
 				cluster_log_likelihood[k] += -0.5 * numpy.sum(
-					numpy.dot(numpy.dot(mean_offset, proposed_sigma_inv[k, :, :]), mean_offset.T).item())
+					numpy.dot(numpy.dot(mean_offset, proposed_sigma_inv[k, :, :]), mean_offset.T))
 
 		# normalize the posterior distribution
 		cluster_log_posterior = cluster_log_prior + cluster_log_likelihood
-		cluster_log_posterior -= scipy.special.logsumexp(cluster_log_posterior)
+		cluster_log_posterior -= scipy.misc.logsumexp(cluster_log_posterior)
 		cluster_posterior = numpy.exp(cluster_log_posterior)
 
 		cdf = numpy.cumsum(cluster_posterior)
@@ -1252,7 +1252,7 @@ class MonteCarlo(object):
 			data_point_indices = numpy.nonzero(self._label == cluster_label)[0]
 
 			if new_label != cluster_label:
-				print("merge cluster %d and %d after component resampling...") % (new_label, cluster_label)
+				print "merge cluster %d and %d after component resampling..." % (new_label, cluster_label)
 
 				self._label[data_point_indices] = new_label
 				self._count[new_label] += self._count[cluster_label]
@@ -1273,7 +1273,7 @@ class MonteCarlo(object):
 			assert numpy.all(self._label != cluster_label)
 
 		# shift down all the cluster indices
-		for cluster_label in range(len(non_empty_cluster)):
+		for cluster_label in xrange(len(non_empty_cluster)):
 			self._label[numpy.nonzero(self._label == non_empty_cluster[cluster_label])[0]] = cluster_label
 
 		self._K -= len(empty_cluster)
@@ -1307,7 +1307,7 @@ class MonteCarlo(object):
 			data_point_indices = numpy.nonzero(self._label == cluster_label)[0]
 
 			if new_label != cluster_label:
-				print("merge cluster %d and %d after component resampling...") % (new_label, cluster_label)
+				print "merge cluster %d and %d after component resampling..." % (new_label, cluster_label)
 
 				self._label[data_point_indices] = new_label
 				self._count[new_label] += self._count[cluster_label]
@@ -1328,7 +1328,7 @@ class MonteCarlo(object):
 			assert numpy.all(self._label != cluster_label)
 
 		# shift down all the cluster indices
-		for cluster_label in range(len(non_empty_cluster)):
+		for cluster_label in xrange(len(non_empty_cluster)):
 			self._label[numpy.nonzero(self._label == non_empty_cluster[cluster_label])[0]] = cluster_label
 
 		self._K -= len(empty_cluster)
@@ -1359,7 +1359,7 @@ class MonteCarlo(object):
 			(label, K, count, mu, sum, log_sigma_det, sigma_inv) = model_parameter
 
 		test_count = numpy.zeros(K)
-		for point_index in numpy.random.permutation(range(self._N)):
+		for point_index in numpy.random.permutation(xrange(self._N)):
 			test_count[label[point_index]] += 1
 		assert numpy.all(test_count == count)
 

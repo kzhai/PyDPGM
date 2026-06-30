@@ -89,8 +89,13 @@ def fit_dpgm(data,
     # Run training iterations
     log_likelihood = None
     for iteration in range(training_iterations):
-        log_likelihood = dpgm.learning()
-        
+        log_likelihood_val = dpgm.learning()
+        # Convert to scalar if it's an array
+        if isinstance(log_likelihood_val, numpy.ndarray):
+            log_likelihood = float(log_likelihood_val.item()) if log_likelihood_val.size == 1 else float(log_likelihood_val[0])
+        else:
+            log_likelihood = float(log_likelihood_val)
+		
         if verbose and (iteration + 1) % max(1, training_iterations // 10) == 0:
             print("Iteration {}/{}: {} clusters, log-likelihood = {:.4f}".format(
                 iteration + 1, training_iterations, dpgm._K, log_likelihood
