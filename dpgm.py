@@ -89,7 +89,7 @@ class MonteCarlo(object):
 		self._log_sigma_det_0 = numpy.log(numpy.linalg.det(self._sigma_0))
 		self._sigma_inv_0 = numpy.linalg.pinv(self._sigma_0)
 
-		# initialize the concentration parameter of the dirichlet distirbution
+		# initialize the concentration parameter of the dirichlet distribution
 		self._alpha_alpha = alpha_alpha
 
 		'''
@@ -1457,7 +1457,7 @@ def fit_dpgm(data,
             log_likelihood = float(log_likelihood_val.item()) if log_likelihood_val.size == 1 else float(log_likelihood_val[0])
         else:
             log_likelihood = float(log_likelihood_val)
-		
+
         if verbose and (iteration + 1) % max(1, training_iterations // 10) == 0:
             print("Iteration {}/{}: {} clusters, log-likelihood = {:.4f}".format(
                 iteration + 1, training_iterations, dpgm._K, log_likelihood
