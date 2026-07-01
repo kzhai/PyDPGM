@@ -371,7 +371,7 @@ class MonteCarlo(object):
 					assert l <= old_log_alpha_alpha
 					assert r >= old_log_alpha_alpha
 
-			print("update hyperparameter to %f") % (numpy.exp(new_log_alpha_alpha))
+			print("update hyperparameter to %f" % (numpy.exp(new_log_alpha_alpha)))
 
 	def split_merge(self):
 		for iteration in range(self._split_merge_iteration):
@@ -563,8 +563,8 @@ class MonteCarlo(object):
 		 proposed_sigma_inv) = model_parameter
 
 		if numpy.random.random() < acceptance_probability:
-			print("split operation granted from %s to %s with acceptance probability %s") % (
-				self._count, proposed_count, acceptance_probability)
+			print("split operation granted from %s to %s with acceptance probability %s" % (
+				self._count, proposed_count, acceptance_probability))
 
 			self._K = proposed_K
 			self._label = proposed_label
@@ -876,8 +876,8 @@ class MonteCarlo(object):
 			assert numpy.sum(self._count) == self._N
 
 			if proposed_count[cluster_label_1] == 0 or proposed_count[cluster_label_2] == 0:
-				print("merge cluster %d and %d during restricted gibbs sampling step...") % (
-					cluster_label_1, cluster_label_2)
+				print("merge cluster %d and %d during restricted gibbs sampling step..." % (
+					cluster_label_1, cluster_label_2))
 
 				if proposed_count[cluster_label_1] == 0:
 					collapsed_cluster = cluster_label_1
@@ -964,8 +964,8 @@ class MonteCarlo(object):
 		assert numpy.all(proposed_count > 0)
 
 		if numpy.random.random() < acceptance_probability:
-			print("merge operation granted from %s to %s with acceptance probability %s") % (
-				self._count, proposed_count, acceptance_probability)
+			print("merge operation granted from %s to %s with acceptance probability %s" % (
+				self._count, proposed_count, acceptance_probability))
 
 			self._K = proposed_K
 			self._label = proposed_label
@@ -1255,7 +1255,7 @@ class MonteCarlo(object):
 			data_point_indices = numpy.nonzero(self._label == cluster_label)[0]
 
 			if new_label != cluster_label:
-				print("merge cluster %d and %d after component resampling...") % (new_label, cluster_label)
+				print("merge cluster %d and %d after component resampling..." % (new_label, cluster_label))
 
 				self._label[data_point_indices] = new_label
 				self._count[new_label] += self._count[cluster_label]
@@ -1310,7 +1310,7 @@ class MonteCarlo(object):
 			data_point_indices = numpy.nonzero(self._label == cluster_label)[0]
 
 			if new_label != cluster_label:
-				print("merge cluster %d and %d after component resampling...") % (new_label, cluster_label)
+				print("merge cluster %d and %d after component resampling..." % (new_label, cluster_label))
 
 				self._label[data_point_indices] = new_label
 				self._count[new_label] += self._count[cluster_label]
