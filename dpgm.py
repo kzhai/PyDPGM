@@ -75,6 +75,7 @@ class MonteCarlo(object):
         alpha_mu=None,
         alpha_sigma=None,
         initial_clusters=0,
+        initial_labels=None,
     ):
         self._X = data
         self._N, self._D = self._X.shape
@@ -122,14 +123,19 @@ class MonteCarlo(object):
 		self._mu = numpy.zeros((1, self._D))
 		"""
 
-        self.random_initialization(initial_clusters)
+        self.random_initialization(initial_clusters, initial_labels=initial_labels)
 
         self._iteration_counter = 0
 
-    def random_initialization(self, number_of_clusters=0):
+    def random_initialization(self, number_of_clusters=0, initial_labels=None):
         assert number_of_clusters <= self._N
 
-        if number_of_clusters == 0:
+        if initial_labels is not None:
+            # resume: seed from a saved label assignment; remap to contiguous 0..K-1 so the
+            # compact-cluster invariants (bincount, etc.) hold regardless of the input labels
+            assert len(initial_labels) == self._N, (len(initial_labels), self._N)
+            _, self._label = numpy.unique(numpy.asarray(initial_labels), return_inverse=True)
+        elif number_of_clusters == 0:
             # initialize every point to its own cluster (K = N)
             self._label = numpy.arange(self._N)
         elif number_of_clusters == 1:
@@ -420,8 +426,11 @@ class MonteCarlo(object):
             log_likelihood_new = numpy.log(numpy.random.random()) + log_likelihood_old
             # print("OLD: %f\tNEW: %f at (%f, %f)" % (log_likelihood_old, log_likelihood_new, self._alpha, self._beta))
 
+            # canonical slice-sampling interval: random position, FIXED width w (Neal 2003).
+            # r = l + w (not x0 + w), so the interval has width exactly w with x0 uniformly
+            # positioned inside, rather than an asymmetric width in [w, 2w].
             l = old_log_alpha_alpha - numpy.random.random() * hyperparameter_step_size
-            r = old_log_alpha_alpha + hyperparameter_step_size
+            r = l + hyperparameter_step_size
 
             for jj in range(hyperparameter_maximum_iteration):
                 new_log_alpha_alpha = l + numpy.random.random() * (r - l)
@@ -901,12 +910,16 @@ class MonteCarlo(object):
             )
             cluster_log_probability_2 += numpy.log(proposed_count[proposed_K - 1])
 
-            log_ratio_2_over_1 = cluster_log_probability_2 - cluster_log_probability_1
-            log_ratio_2_over_1 -= scipy.special.logsumexp(log_ratio_2_over_1)
-            ratio_2_over_1 = numpy.exp(log_ratio_2_over_1)
+            # softmax over the two clusters, computed as P1 / (P1 + P2) via a stable logsumexp
+            # of the 2-element log-prob vector. The old code called logsumexp on the *scalar*
+            # log-ratio -- a no-op that zeroed it, forcing cluster_probability_1 = 0.5 on every
+            # point regardless of the data and reducing the split proposal to a coin flip.
+            log_total = scipy.special.logsumexp(
+                [cluster_log_probability_1, cluster_log_probability_2]
+            )
+            cluster_probability_1 = numpy.exp(cluster_log_probability_1 - log_total)
 
             # sample a new cluster label for current point
-            cluster_probability_1 = 1.0 / (1.0 + ratio_2_over_1)
             if numpy.random.random() <= cluster_probability_1:
                 new_label = cluster_label
             else:
@@ -1089,17 +1102,19 @@ class MonteCarlo(object):
                         proposed_count[cluster_index_2]
                     )
 
-                # sample a new cluster label for current point
-                ratio_2_over_1 = numpy.exp(
-                    cluster_log_probability_2 - cluster_log_probability_1
+                # sample a new cluster label for current point. Use a stable logsumexp softmax:
+                # the direct exp(logP2 - logP1) form overflows to +inf for a large gap, which
+                # then gives a 0/1 probability and a -inf transition log-likelihood.
+                log_total = scipy.special.logsumexp(
+                    [cluster_log_probability_1, cluster_log_probability_2]
                 )
-                cluster_probability_1 = 1.0 / (1.0 + ratio_2_over_1)
+                cluster_probability_1 = numpy.exp(cluster_log_probability_1 - log_total)
                 if numpy.random.random() <= cluster_probability_1:
                     new_label = cluster_index_1
-                    transition_log_likelihood += numpy.log(cluster_probability_1)
+                    transition_log_likelihood += cluster_log_probability_1 - log_total
                 else:
                     new_label = cluster_index_2
-                    transition_log_likelihood += numpy.log(1 - cluster_probability_1)
+                    transition_log_likelihood += cluster_log_probability_2 - log_total
 
                 proposed_label[point_index] = new_label
                 proposed_count[new_label] += 1
@@ -1869,6 +1884,7 @@ def fit_dpgm_mc(
     merge_proposal=0,
     initial_clusters=1,
     covariance_ridge=1e-6,
+    resume_state=None,
     save_best=True,
     verbose=True,
 ):
@@ -1954,7 +1970,18 @@ def fit_dpgm_mc(
         covariance_ridge=covariance_ridge,
     )
 
-    dpgm._initialize(data, alpha_alpha=alpha_alpha, initial_clusters=initial_clusters)
+    if resume_state is not None:
+        # resume: seed the sampler from a saved label assignment (state is rebuilt exactly from
+        # the labels + data), then continue for `training_iterations` more sweeps
+        dpgm._initialize(
+            data, alpha_alpha=alpha_alpha, initial_labels=resume_state["label"]
+        )
+        dpgm._iteration_counter = int(resume_state.get("iteration_counter", 0))
+        if verbose:
+            print("Resuming from checkpoint at iteration {} with {} clusters".format(
+                dpgm._iteration_counter, dpgm._K))
+    else:
+        dpgm._initialize(data, alpha_alpha=alpha_alpha, initial_clusters=initial_clusters)
 
     # Run training iterations
     log_likelihood = None
@@ -2352,8 +2379,23 @@ class VariationalInference(object):
 
     # -------------------------------------------------------------------- fit
 
-    def fit(self, X):
+    def fit(self, X, resume_state=None):
         self._initialize(X)
+        if resume_state is not None:
+            # resume: restore the variational parameters and derive responsibilities from them
+            # (one E-step), replacing the fresh random init; then continue coordinate ascent
+            self._m = resume_state["m"]
+            self._beta = resume_state["beta"]
+            self._nu = resume_state["nu"]
+            self._W = resume_state["W"]
+            self._gamma1 = resume_state["gamma1"]
+            self._gamma2 = resume_state["gamma2"]
+            self.truncation = self._m.shape[0]
+            E_logdet_Lambda, _, E_log_pi, _, _ = self._expectations()
+            _, self._resp = self._e_step(E_logdet_Lambda, E_log_pi)
+            if self.verbose:
+                print("Resuming from checkpoint with {} effective clusters".format(
+                    self.n_effective_clusters()))
         previous_elbo = None
         self.elbo_trajectory_ = []
 
@@ -2428,7 +2470,8 @@ class VariationalInference(object):
 
 
 def fit_dpgm_vi(
-    data, alpha=1.0, truncation=50, max_iter=200, tol=1e-4, random_state=0, verbose=True
+    data, alpha=1.0, truncation=50, max_iter=200, tol=1e-4, random_state=0,
+    resume_state=None, verbose=True
 ):
     """
     Fit a DP Gaussian mixture by variational inference. Returns a dict mirroring
@@ -2448,7 +2491,7 @@ def fit_dpgm_vi(
         random_state=random_state,
         verbose=verbose,
     )
-    model.fit(data)
+    model.fit(data, resume_state=resume_state)
 
     raw_labels = numpy.argmax(model._resp, axis=1)
     used = numpy.unique(raw_labels)
