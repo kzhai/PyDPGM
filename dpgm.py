@@ -39,6 +39,7 @@ class MonteCarlo(object):
         # gamma_shape_alpha=1,
         # gamma_scale_beta=1,
         hyper_parameter_interval=-1,
+        covariance_ridge=1e-6,
     ):
         self._split_merge_heuristics = split_merge_heuristics
         self._split_proposal = split_proposal
@@ -47,6 +48,10 @@ class MonteCarlo(object):
         self._split_merge_iteration = split_merge_iteration
         self._component_resampling_interval = component_resampling_interval
         self._restrict_gibbs_sampling_iteration = restrict_gibbs_sampling_iteration
+
+        # ridge added to each cluster's empirical covariance for numerical stability; larger
+        # values also temper over-fragmentation by keeping cluster predictive shapes broader
+        self._covariance_ridge = covariance_ridge
 
         # self._gamma_shape_alpha = gamma_shape_alpha
         # self._gamma_scale_beta = gamma_scale_beta
@@ -527,9 +532,9 @@ class MonteCarlo(object):
             # dimensions (n < D), make the empirical covariance singular. That destabilizes the
             # pinv below and can drive slogdet(sigma_hat) to -inf, breaking the multinomial sampling.
             if self._D > 1:
-                temp_sigma += numpy.eye(self._D) * 1e-6
+                temp_sigma += numpy.eye(self._D) * self._covariance_ridge
             else:
-                temp_sigma += 1e-6
+                temp_sigma += self._covariance_ridge
             temp_sigma_inv = numpy.linalg.pinv(temp_sigma)
 
         # compute n*\Sigma^{-1}
@@ -1863,6 +1868,7 @@ def fit_dpgm_mc(
     split_proposal=0,
     merge_proposal=0,
     initial_clusters=1,
+    covariance_ridge=1e-6,
     save_best=True,
     verbose=True,
 ):
@@ -1945,6 +1951,7 @@ def fit_dpgm_mc(
         split_merge_heuristics=split_merge_heuristics,
         split_proposal=split_proposal,
         merge_proposal=merge_proposal,
+        covariance_ridge=covariance_ridge,
     )
 
     dpgm._initialize(data, alpha_alpha=alpha_alpha, initial_clusters=initial_clusters)
