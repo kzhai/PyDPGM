@@ -66,7 +66,8 @@ class MonteCarlo(object):
 	                # alpha_kappa=1.,
 	                # alpha_nu=1.,
 	                alpha_mu=None,
-	                alpha_sigma=None
+	                alpha_sigma=None,
+	                initial_clusters=0
 	                ):
 		self._X = data
 		(self._N, self._D) = self._X.shape
@@ -86,7 +87,12 @@ class MonteCarlo(object):
 			self._sigma_0 = alpha_sigma
 		assert self._sigma_0.shape == (self._D, self._D)
 
-		self._log_sigma_det_0 = numpy.log(numpy.linalg.det(self._sigma_0))
+		# use slogdet instead of log(det(...)): at high dimension det() over/underflows to
+		# +-inf/0 and log() then yields inf/nan, whereas slogdet returns log|det| directly.
+		# slogdet itself can raise spurious FP-flag warnings on some numpy/LAPACK builds even
+		# for well-conditioned inputs (the returned value is still correct), so silence locally.
+		with numpy.errstate(over='ignore', divide='ignore', invalid='ignore'):
+			self._log_sigma_det_0 = numpy.linalg.slogdet(self._sigma_0)[1]
 		self._sigma_inv_0 = numpy.linalg.pinv(self._sigma_0)
 
 		# initialize the concentration parameter of the dirichlet distribution
@@ -109,7 +115,7 @@ class MonteCarlo(object):
 		self._mu = numpy.zeros((1, self._D))
 		'''
 
-		self.random_initialization()
+		self.random_initialization(initial_clusters)
 
 		self._iteration_counter = 0
 
@@ -117,11 +123,16 @@ class MonteCarlo(object):
 		assert number_of_clusters <= self._N
 
 		if number_of_clusters == 0:
-			# initialize every point to one cluster per point
+			# initialize every point to its own cluster (K = N)
 			self._label = numpy.arange(self._N)
-		else:
-			# initialize all points to one cluster
+		elif number_of_clusters == 1:
+			# initialize all points to a single cluster
 			self._label = numpy.zeros(self._N, dtype='int64')
+		else:
+			# randomly assign points into `number_of_clusters` clusters; force the first
+			# `number_of_clusters` points to cover every label so no cluster starts empty
+			self._label = numpy.random.randint(0, number_of_clusters, size=self._N)
+			self._label[:number_of_clusters] = numpy.arange(number_of_clusters)
 
 		self._K = len(numpy.unique(self._label))
 		self._count = numpy.bincount(self._label)
@@ -236,14 +247,14 @@ class MonteCarlo(object):
 			cluster_log_likelihood[self._K] += -0.5 * numpy.dot(numpy.dot(mean_offset, self._sigma_inv_0),
 			                                                    mean_offset.T).item()
 
-			# compute the likelihood for the existing clusters
-			for k in range(self._K):
-				mean_offset = self._X[[point_index], :] - self._mu[[k], :]
-				assert mean_offset.shape == (1, self._D)
-
-				cluster_log_likelihood[k] = -0.5 * self._log_sigma_det[k]
-				cluster_log_likelihood[k] += -0.5 * numpy.dot(numpy.dot(mean_offset, self._sigma_inv[k, :, :]),
-				                                              mean_offset.T).item()
+			# compute the likelihood for the existing clusters, vectorized across all K clusters
+			# instead of a Python loop with a matmul per cluster
+			mean_offsets = self._X[point_index, :] - self._mu
+			assert mean_offsets.shape == (self._K, self._D)
+			# quadratic form off_k . sigma_inv_k . off_k for every cluster k, via batched matmul
+			sigma_inv_offsets = numpy.matmul(mean_offsets[:, numpy.newaxis, :], self._sigma_inv)[:, 0, :]
+			quadratic_forms = numpy.sum(sigma_inv_offsets * mean_offsets, axis=1)
+			cluster_log_likelihood[:self._K] = -0.5 * self._log_sigma_det - 0.5 * quadratic_forms
 
 			# normalize the posterior distribution
 			cluster_log_posterior = cluster_log_prior + cluster_log_likelihood
@@ -312,14 +323,12 @@ class MonteCarlo(object):
 			# initialize the likelihood vector for all clusters
 			cluster_log_likelihood = numpy.zeros(self._K)
 
-			# compute the likelihood for the existing clusters
-			for k in range(self._K):
-				mean_offset = X_prime[[point_index], :] - self._mu[[k], :]
-				assert mean_offset.shape == (1, self._D)
-
-				cluster_log_likelihood[k] = -0.5 * self._log_sigma_det[k]
-				cluster_log_likelihood[k] += -0.5 * numpy.dot(numpy.dot(mean_offset, self._sigma_inv[k, :, :]),
-				                                              mean_offset.T).item()
+			# compute the likelihood for the existing clusters, vectorized across all K clusters
+			mean_offsets = X_prime[point_index, :] - self._mu
+			assert mean_offsets.shape == (self._K, self._D)
+			sigma_inv_offsets = numpy.matmul(mean_offsets[:, numpy.newaxis, :], self._sigma_inv)[:, 0, :]
+			quadratic_forms = numpy.sum(sigma_inv_offsets * mean_offsets, axis=1)
+			cluster_log_likelihood[:] = -0.5 * self._log_sigma_det - 0.5 * quadratic_forms
 
 			# normalize the posterior distribution
 			cluster_log_posterior = cluster_log_prior + cluster_log_likelihood
@@ -461,7 +470,9 @@ class MonteCarlo(object):
 		assert sigma_hat.shape == (self._D, self._D)
 
 		sigma_inv[cluster_id, :, :] = numpy.linalg.pinv(sigma_hat)
-		log_sigma_det[cluster_id] = numpy.log(numpy.linalg.det(sigma_hat))
+		# slogdet is numerically stable at high dimension where det() overflows (see _initialize)
+		with numpy.errstate(over='ignore', divide='ignore', invalid='ignore'):
+			log_sigma_det[cluster_id] = numpy.linalg.slogdet(sigma_hat)[1]
 
 		# compute \Sigma_{0}^{-1} \mu_{0}
 		temp_d = numpy.dot(self._sigma_inv_0, self._mu_0.T)
@@ -1093,14 +1104,15 @@ class MonteCarlo(object):
 		else:
 			alpha_alpha = hyper_parameter
 
-		# log likelihood probability
-		log_likelihood = 0.
-		for n in range(self._N):
-			log_likelihood -= 0.5 * self._D * numpy.log(2.0 * numpy.pi) + 0.5 * log_sigma_det[label[n]]
-			mean_offset = self._X[n, :][numpy.newaxis, :] - mu[label[n], :]
-			assert (mean_offset.shape == (1, self._D))
-			log_likelihood -= 0.5 * numpy.dot(numpy.dot(mean_offset, sigma_inv[label[n], :, :]),
-			                                  mean_offset.transpose())
+		# log likelihood probability, accumulated per cluster (vectorized) rather than per point
+		log_likelihood = -0.5 * self._N * self._D * numpy.log(2.0 * numpy.pi)
+		for k in range(K):
+			point_indices = numpy.nonzero(label == k)[0]
+			if len(point_indices) == 0:
+				continue
+			mean_offset = self._X[point_indices, :] - mu[k, :]
+			quadratic_forms = numpy.sum((mean_offset @ sigma_inv[k, :, :]) * mean_offset, axis=1)
+			log_likelihood -= 0.5 * len(point_indices) * log_sigma_det[k] + 0.5 * numpy.sum(quadratic_forms)
 
 		# log prior probability
 		log_prior = K * numpy.log(alpha_alpha)
@@ -1130,14 +1142,15 @@ class MonteCarlo(object):
 		else:
 			alpha_alpha = hyper_parameter
 
-		# log likelihood probability
-		log_likelihood = 0.
-		for n in range(self._N):
-			log_likelihood -= 0.5 * self._D * numpy.log(2.0 * numpy.pi) + 0.5 * log_sigma_det[label[n]]
-			mean_offset = self._X[n, :][numpy.newaxis, :] - mu[label[n], :]
-			assert (mean_offset.shape == (1, self._D))
-			log_likelihood -= 0.5 * numpy.dot(numpy.dot(mean_offset, sigma_inv[label[n], :, :]),
-			                                  mean_offset.transpose())
+		# log likelihood probability, accumulated per cluster (vectorized) rather than per point
+		log_likelihood = -0.5 * self._N * self._D * numpy.log(2.0 * numpy.pi)
+		for k in range(K):
+			point_indices = numpy.nonzero(label == k)[0]
+			if len(point_indices) == 0:
+				continue
+			mean_offset = self._X[point_indices, :] - mu[k, :]
+			quadratic_forms = numpy.sum((mean_offset @ sigma_inv[k, :, :]) * mean_offset, axis=1)
+			log_likelihood -= 0.5 * len(point_indices) * log_sigma_det[k] + 0.5 * numpy.sum(quadratic_forms)
 
 		return log_likelihood
 
@@ -1371,12 +1384,14 @@ class MonteCarlo(object):
 
 
 
-def fit_dpgm(data, 
+def fit_dpgm(data,
              alpha_alpha=1.0,
              training_iterations=100,
              split_merge_heuristics=-1,
              split_proposal=0,
              merge_proposal=0,
+             initial_clusters=1,
+             save_best=True,
              verbose=True):
     """
     Fit a Dirichlet Process Gaussian Mixture Model to the data.
@@ -1406,6 +1421,18 @@ def fit_dpgm(data,
         0: metropolis-hastings
         1: restricted gibbs sampler and metropolis-hastings
         2: gibbs sampler and metropolis-hastings
+    initial_clusters : int, optional (default=1)
+        How the sampler is seeded:
+        1: start with all points in a single cluster and let the Gibbs sampler grow
+            clusters. Recommended for large N -- avoids the expensive first pass below.
+        0: start with one cluster per point (K = N). Faithful to the original code but
+            makes the first iteration O(N^2 * D^2), impractical for large datasets.
+        k > 1: randomly assign points into k clusters (a random restart from K = k).
+    save_best : bool, optional (default=True)
+        If True, return the sweep with the highest log-posterior rather than the last sweep,
+        and leave the model in that state (so prediction uses the best sweep too). Gibbs is a
+        sampler, so the final sweep is not necessarily the best. The chosen sweep index is
+        reported in results['best_iteration'].
     verbose : bool, optional (default=True)
         Whether to print progress information
         
@@ -1416,7 +1443,8 @@ def fit_dpgm(data,
         - 'n_clusters': number of clusters found
         - 'cluster_means': cluster centers (K x M)
         - 'cluster_counts': number of points in each cluster (K,)
-        - 'log_likelihood': final log-likelihood value
+        - 'log_likelihood': log-posterior of the returned sweep
+        - 'best_iteration': index of the sweep that was returned (None if save_best=False)
         - 'model': the trained MonteCarlo model object
     """
     
@@ -1446,10 +1474,13 @@ def fit_dpgm(data,
         merge_proposal=merge_proposal
     )
     
-    dpgm._initialize(data, alpha_alpha=alpha_alpha)
+    dpgm._initialize(data, alpha_alpha=alpha_alpha, initial_clusters=initial_clusters)
     
     # Run training iterations
     log_likelihood = None
+    best_log_likelihood = None
+    best_iteration = None
+    best_state = None
     for iteration in range(training_iterations):
         log_likelihood_val = dpgm.learning()
         # Convert to scalar if it's an array
@@ -1458,18 +1489,36 @@ def fit_dpgm(data,
         else:
             log_likelihood = float(log_likelihood_val)
 
+        # snapshot the model whenever this sweep improves on the best log-posterior so far;
+        # Gibbs is a sampler, so the last sweep is not necessarily the best one
+        if save_best and (best_log_likelihood is None or log_likelihood > best_log_likelihood):
+            best_log_likelihood = log_likelihood
+            best_iteration = iteration + 1
+            best_state = (
+                dpgm._label.copy(), dpgm._K, dpgm._count.copy(), dpgm._mu.copy(),
+                dpgm._sum.copy(), dpgm._log_sigma_det.copy(), dpgm._sigma_inv.copy(),
+            )
+
         if verbose and (iteration + 1) % max(1, training_iterations // 10) == 0:
             print("Iteration {}/{}: {} clusters, log-likelihood = {:.4f}".format(
                 iteration + 1, training_iterations, dpgm._K, log_likelihood
             ))
-    
+
+    # restore the best sweep so the returned labels / model reflect it (used for prediction too)
+    if save_best and best_state is not None:
+        (dpgm._label, dpgm._K, dpgm._count, dpgm._mu,
+         dpgm._sum, dpgm._log_sigma_det, dpgm._sigma_inv) = best_state
+        log_likelihood = best_log_likelihood
+
     if verbose:
         print("=" * 60)
         print("Training completed!")
+        if save_best and best_iteration is not None:
+            print("Best sweep: {} (of {})".format(best_iteration, training_iterations))
         print("Final number of clusters: {}".format(dpgm._K))
         print("Final log-likelihood: {:.4f}".format(log_likelihood))
         print("=" * 60)
-    
+
     # Extract results
     results = {
         'labels': dpgm._label.copy(),
@@ -1477,9 +1526,10 @@ def fit_dpgm(data,
         'cluster_means': dpgm._mu.copy(),
         'cluster_counts': dpgm._count.copy(),
         'log_likelihood': log_likelihood,
+        'best_iteration': best_iteration,
         'model': dpgm
     }
-    
+
     return results
 
 
