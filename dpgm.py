@@ -749,10 +749,7 @@ class MonteCarlo(object):
         acceptance_log_probability = (
             log_proposal_probability + new_log_posterior - old_log_posterior
         )
-        acceptance_log_probability -= scipy.special.logsumexp(
-            acceptance_log_probability
-        )
-        acceptance_probability = numpy.exp(acceptance_log_probability)
+        acceptance_probability = min(1.0, numpy.exp(acceptance_log_probability))
 
         (
             proposed_label,
@@ -1395,10 +1392,7 @@ class MonteCarlo(object):
         acceptance_log_probability = (
             log_proposal_probability + new_log_posterior - old_log_posterior
         )
-        acceptance_log_probability -= scipy.special.logsumexp(
-            acceptance_log_probability
-        )
-        acceptance_probability = numpy.exp(acceptance_log_probability)
+        acceptance_probability = min(1.0, numpy.exp(acceptance_log_probability))
 
         (
             proposed_label,
@@ -1727,7 +1721,7 @@ class MonteCarlo(object):
 
         # compute the likelihood for the existing clusters
         for k in range(proposed_K):
-            if self._count[k] == 0:
+            if proposed_count[k] == 0:
                 cluster_log_likelihood[k] = negative_infinity
                 continue
 
@@ -1740,9 +1734,7 @@ class MonteCarlo(object):
                     -0.5 * proposed_count[cluster_label] * self._log_sigma_det_0
                 )
                 cluster_log_likelihood[cluster_label] += -0.5 * numpy.sum(
-                    numpy.dot(
-                        numpy.dot(mean_offset, self._sigma_inv_0), mean_offset.T
-                    ).item()
+                    (mean_offset @ self._sigma_inv_0) * mean_offset
                 )
             else:
                 mean_offset = self._X[data_point_indices, :] - proposed_mu[[k], :]
@@ -1752,10 +1744,7 @@ class MonteCarlo(object):
                     -0.5 * proposed_count[cluster_label] * proposed_log_sigma_det[k]
                 )
                 cluster_log_likelihood[k] += -0.5 * numpy.sum(
-                    numpy.dot(
-                        numpy.dot(mean_offset, proposed_sigma_inv[k, :, :]),
-                        mean_offset.T,
-                    ).item()
+                    (mean_offset @ proposed_sigma_inv[k, :, :]) * mean_offset
                 )
 
         # normalize the posterior distribution
@@ -2312,6 +2301,10 @@ class VariationalInference(object):
         digamma_sum = scipy.special.digamma(self._gamma1 + self._gamma2)
         E_log_v = scipy.special.digamma(self._gamma1) - digamma_sum  # (T,)
         E_log_1mv = scipy.special.digamma(self._gamma2) - digamma_sum  # (T,)
+        # Truncated stick-breaking fixes the terminal stick v_T = 1 deterministically
+        # (Blei & Jordan, 2006), so the mixture weights sum to 1 within the truncation.
+        E_log_v[-1] = 0.0
+        E_log_1mv[-1] = 0.0
         # E[ln pi_t] = E[ln v_t] + sum_{s<t} E[ln(1 - v_s)]
         cumulative = numpy.concatenate(([0.0], numpy.cumsum(E_log_1mv)[:-1]))
         E_log_pi = E_log_v + cumulative  # (T,)
@@ -2369,8 +2362,11 @@ class VariationalInference(object):
         # E[ln p(Z | pi)]  (Bishop 10.72)
         term_z = numpy.sum(Nk * E_log_pi)
 
-        # E[ln p(v)] with Beta(1, alpha) stick prior
-        term_v = numpy.sum(numpy.log(self.alpha) + (self.alpha - 1.0) * E_log_1mv)
+        # E[ln p(v)] with Beta(1, alpha) stick prior. The terminal stick is fixed
+        # to v_T = 1 (point mass), so it is not a random variable and is excluded.
+        term_v = numpy.sum(
+            numpy.log(self.alpha) + (self.alpha - 1.0) * E_log_1mv[:-1]
+        )
 
         # E[ln p(mu, Lambda)]  (Bishop 10.74)
         term_ml = 0.0
@@ -2393,15 +2389,16 @@ class VariationalInference(object):
         # -E[ln q(Z)]  (entropy of responsibilities)
         term_qz = -numpy.sum(resp * log_resp)
 
-        # -E[ln q(v)]  (entropy of the Beta factors)
+        # -E[ln q(v)]  (entropy of the Beta factors). The terminal stick is a fixed
+        # point mass v_T = 1 with zero entropy, so it is excluded from the sum.
         ln_beta_fn = (
-            scipy.special.gammaln(self._gamma1)
-            + scipy.special.gammaln(self._gamma2)
-            - scipy.special.gammaln(self._gamma1 + self._gamma2)
+            scipy.special.gammaln(self._gamma1[:-1])
+            + scipy.special.gammaln(self._gamma2[:-1])
+            - scipy.special.gammaln(self._gamma1[:-1] + self._gamma2[:-1])
         )
         term_qv = -numpy.sum(
-            (self._gamma1 - 1.0) * E_log_v
-            + (self._gamma2 - 1.0) * E_log_1mv
+            (self._gamma1[:-1] - 1.0) * E_log_v[:-1]
+            + (self._gamma2[:-1] - 1.0) * E_log_1mv[:-1]
             - ln_beta_fn
         )
 
@@ -2518,11 +2515,16 @@ class VariationalInference(object):
 
 def fit_dpgm_vi(
     data, alpha=1.0, truncation=50, max_iter=200, tol=1e-4, random_state=0,
-    resume_state=None, verbose=True
+    beta_0=1.0, nu_0=None, W_0=None, resume_state=None, verbose=True
 ):
     """
     Fit a DP Gaussian mixture by variational inference. Returns a dict mirroring
     fit_dpgm so it drops into the same tooling.
+
+    beta_0, nu_0, W_0 are the NIW prior hyperparameters (data-driven defaults if None).
+    nu_0 is the Wishart degrees of freedom -- the main covariance-resolution lever:
+    larger nu_0 pulls each cluster covariance toward the global data covariance,
+    yielding broader, fewer effective clusters (the VI analog of the Gibbs ridge).
 
     Cluster labels are remapped to a contiguous 0..K-1 over the effective (non-empty) components.
     """
@@ -2536,6 +2538,9 @@ def fit_dpgm_vi(
         max_iter=max_iter,
         tol=tol,
         random_state=random_state,
+        beta_0=beta_0,
+        nu_0=nu_0,
+        W_0=W_0,
         verbose=verbose,
     )
     model.fit(data, resume_state=resume_state)
