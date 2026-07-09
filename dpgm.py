@@ -159,14 +159,28 @@ class MonteCarlo(object):
         self._log_sigma_det = numpy.zeros(self._K)
         self._mu = numpy.zeros((self._K, self._D))
 
-        # compute the sum and square sum of all cluster up to truncation level
+        # compute the sum (Sigma x) and square sum (Sigma x x^T) sufficient statistics per cluster;
+        # the square sum lets update_cluster_parameters form the covariance in O(D^2) rather than
+        # re-gathering the cluster's points and calling numpy.cov (O(n D^2)) on every reassignment
         self._sum = numpy.zeros((self._K, self._D))
+        self._square_sum = numpy.zeros((self._K, self._D, self._D))
         for cluster_index in range(self._K):
             point_indices = numpy.nonzero(self._label == (cluster_index))[0]
-            self._sum[cluster_index, :] = numpy.sum(self._X[point_indices, :], 0)
+            points_in_cluster = self._X[point_indices, :]
+            self._sum[cluster_index, :] = numpy.sum(points_in_cluster, 0)
+            self._square_sum[cluster_index, :, :] = points_in_cluster.T @ points_in_cluster
 
-            # update the cluster parameters
+        for cluster_index in range(self._K):
+            # update the cluster parameters (reads _sum / _square_sum / _count)
             self.update_cluster_parameters(cluster_index)
+
+    def _recompute_square_sum(self):
+        """Rebuild the per-cluster Sigma x x^T from the current labels (used to resync after
+        split/merge commits, which replace _sum wholesale without tracking the square sum)."""
+        self._square_sum = numpy.zeros((self._K, self._D, self._D))
+        for cluster_index in range(self._K):
+            points_in_cluster = self._X[numpy.nonzero(self._label == cluster_index)[0], :]
+            self._square_sum[cluster_index, :, :] = points_in_cluster.T @ points_in_cluster
 
     def learning(self):
         self._iteration_counter += 1
@@ -208,10 +222,14 @@ class MonteCarlo(object):
 	"""
 
     def sample_cgs(self):
+        # resync the running square sum with the current labels: a split/merge commit in the
+        # previous iteration may have replaced _sum / _label without maintaining _square_sum
+        self._recompute_square_sum()
         # sample the total data
         for point_index in numpy.random.permutation(range(self._N)):
             assert self._count.shape == (self._K,)
             assert self._sum.shape == (self._K, self._D)
+            assert self._square_sum.shape == (self._K, self._D, self._D)
             assert self._mu.shape == (self._K, self._D)
             assert self._sigma_inv.shape == (self._K, self._D, self._D)
             assert self._log_sigma_det.shape == (self._K,)
@@ -228,10 +246,14 @@ class MonteCarlo(object):
             old_log_sigma_det = self._log_sigma_det[old_label]
             old_mu = self._mu[old_label, :]
 
-            # remove the current point from the cluster
+            # remove the current point from the cluster (keep the square sum in lockstep with _sum)
+            point_outer = numpy.outer(
+                self._X[point_index, :], self._X[point_index, :]
+            )
             self._count[old_label] -= 1
             self._label[point_index] = -1
             self._sum[old_label, :] -= self._X[point_index, :]
+            self._square_sum[old_label, :, :] -= point_outer
 
             if self._count[old_label] == 0:
                 # if current point is from a singleton cluster, shift the last cluster to current one
@@ -239,6 +261,7 @@ class MonteCarlo(object):
                 self._label[numpy.nonzero(self._label == (self._K - 1))] = old_label
 
                 self._sum[old_label, :] = self._sum[self._K - 1, :]
+                self._square_sum[old_label, :, :] = self._square_sum[self._K - 1, :, :]
                 self._mu[old_label, :] = self._mu[self._K - 1, :]
                 self._sigma_inv[old_label, :, :] = self._sigma_inv[self._K - 1, :, :]
                 self._log_sigma_det[old_label] = self._log_sigma_det[self._K - 1]
@@ -247,6 +270,7 @@ class MonteCarlo(object):
                 self._count = numpy.delete(self._count, [self._K - 1], axis=0)
 
                 self._sum = numpy.delete(self._sum, [self._K - 1], axis=0)
+                self._square_sum = numpy.delete(self._square_sum, [self._K - 1], axis=0)
                 self._mu = numpy.delete(self._mu, [self._K - 1], axis=0)
                 self._sigma_inv = numpy.delete(self._sigma_inv, [self._K - 1], axis=0)
                 self._log_sigma_det = numpy.delete(
@@ -319,6 +343,9 @@ class MonteCarlo(object):
                 self._count = numpy.hstack((self._count, numpy.zeros(1)))
 
                 self._sum = numpy.vstack((self._sum, numpy.zeros((1, self._D))))
+                self._square_sum = numpy.vstack(
+                    (self._square_sum, numpy.zeros((1, self._D, self._D)))
+                )
                 self._mu = numpy.vstack((self._mu, numpy.zeros((1, self._D))))
                 self._sigma_inv = numpy.vstack(
                     (self._sigma_inv, numpy.zeros((1, self._D, self._D)))
@@ -337,7 +364,7 @@ class MonteCarlo(object):
             self._label[point_index] = new_label
             self._count[new_label] += 1
             self._sum[new_label, :] += self._X[point_index, :]
-            # self._square_sum[new_label, :, :] += numpy.dot(self._X[[point_index], :].transpose(), self._X[[point_index], :])
+            self._square_sum[new_label, :, :] += point_outer
 
             if new_label == old_label:
                 # if the point is allocated to the old cluster, retrieve all previous parameter
@@ -529,14 +556,25 @@ class MonteCarlo(object):
             temp_sigma = self._sigma_0
             temp_sigma_inv = self._sigma_inv_0
         else:
-            # if there are more than one point in the cluster
-            # adjust its covariance matrix
-            points_in_cluster = self._X[numpy.nonzero(label == cluster_id)[0], :]
-            assert points_in_cluster.shape == (count[cluster_id], self._D), (
-                points_in_cluster.shape,
-                count[cluster_id],
-            )
-            temp_sigma = numpy.cov(points_in_cluster.T)
+            # if there are more than one point in the cluster, adjust its covariance matrix.
+            n = count[cluster_id]
+            if model_parameter == None:
+                # main path: form the sample covariance from the running sufficient statistics,
+                # cov = (Sigma xx^T - (Sigma x)(Sigma x)^T / n) / (n - 1), in O(D^2) -- matches
+                # numpy.cov (ddof=1) exactly but never re-gathers the cluster's points.
+                s = sum[cluster_id, :]
+                temp_sigma = (
+                    self._square_sum[cluster_id, :, :] - numpy.outer(s, s) / n
+                ) / (n - 1)
+            else:
+                # proposal path (split/merge): membership lives in the proposed labels, which are
+                # not reflected in the running square sum, so recompute from the points directly.
+                points_in_cluster = self._X[numpy.nonzero(label == cluster_id)[0], :]
+                assert points_in_cluster.shape == (n, self._D), (
+                    points_in_cluster.shape,
+                    n,
+                )
+                temp_sigma = numpy.cov(points_in_cluster.T)
             # ridge-regularize: collinear/duplicate points, or a cluster with fewer points than
             # dimensions (n < D), make the empirical covariance singular. That destabilizes the
             # pinv below and can drive slogdet(sigma_hat) to -inf, breaking the multinomial sampling.
@@ -1759,12 +1797,14 @@ class MonteCarlo(object):
                 self._label[data_point_indices] = new_label
                 self._count[new_label] += self._count[cluster_label]
                 self._sum[new_label, :] += self._sum[cluster_label, :]
+                self._square_sum[new_label, :, :] += self._square_sum[cluster_label, :, :]
 
                 self.update_cluster_parameters(new_label)
 
                 # clear the current cluster
                 self._count[cluster_label] = 0
                 self._sum[cluster_label, :] = 0
+                self._square_sum[cluster_label, :, :] = 0
                 self._mu[cluster_label, :] = 0
                 self._sigma_inv[cluster_label, :, :] = 0
                 self._log_sigma_det[cluster_label] = 0
@@ -1786,6 +1826,8 @@ class MonteCarlo(object):
         assert self._count.shape == (self._K,)
         self._sum = numpy.delete(self._sum, empty_cluster, axis=0)
         assert self._sum.shape == (self._K, self._D)
+        self._square_sum = numpy.delete(self._square_sum, empty_cluster, axis=0)
+        assert self._square_sum.shape == (self._K, self._D, self._D)
         self._mu = numpy.delete(self._mu, empty_cluster, axis=0)
         assert self._mu.shape == (self._K, self._D)
         self._sigma_inv = numpy.delete(self._sigma_inv, empty_cluster, axis=0)
@@ -1819,12 +1861,14 @@ class MonteCarlo(object):
                 self._label[data_point_indices] = new_label
                 self._count[new_label] += self._count[cluster_label]
                 self._sum[new_label, :] += self._sum[cluster_label, :]
+                self._square_sum[new_label, :, :] += self._square_sum[cluster_label, :, :]
 
                 self.update_cluster_parameters(new_label)
 
                 # clear the current cluster
                 self._count[cluster_label] = 0
                 self._sum[cluster_label, :] = 0
+                self._square_sum[cluster_label, :, :] = 0
                 self._mu[cluster_label, :] = 0
                 self._sigma_inv[cluster_label, :, :] = 0
                 self._log_sigma_det[cluster_label] = 0
@@ -1846,6 +1890,8 @@ class MonteCarlo(object):
         assert self._count.shape == (self._K,)
         self._sum = numpy.delete(self._sum, empty_cluster, axis=0)
         assert self._sum.shape == (self._K, self._D)
+        self._square_sum = numpy.delete(self._square_sum, empty_cluster, axis=0)
+        assert self._square_sum.shape == (self._K, self._D, self._D)
         self._mu = numpy.delete(self._mu, empty_cluster, axis=0)
         assert self._mu.shape == (self._K, self._D)
         self._sigma_inv = numpy.delete(self._sigma_inv, empty_cluster, axis=0)
