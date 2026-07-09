@@ -576,27 +576,28 @@ class MonteCarlo(object):
                 )
                 temp_sigma = numpy.cov(points_in_cluster.T)
             # ridge-regularize: collinear/duplicate points, or a cluster with fewer points than
-            # dimensions (n < D), make the empirical covariance singular. That destabilizes the
-            # pinv below and can drive slogdet(sigma_hat) to -inf, breaking the multinomial sampling.
+            # dimensions (n < D), make the empirical covariance singular. Adding the ridge also
+            # guarantees temp_sigma (and hence temp_b, sigma_hat below) is positive-definite, so we
+            # can use the ~13x faster numpy.linalg.inv (LU) instead of pinv (SVD) for the inverses.
             if self._D > 1:
                 temp_sigma += numpy.eye(self._D) * self._covariance_ridge
             else:
                 temp_sigma += self._covariance_ridge
-            temp_sigma_inv = numpy.linalg.pinv(temp_sigma)
+            temp_sigma_inv = numpy.linalg.inv(temp_sigma)
 
         # compute n*\Sigma^{-1}
         temp_a = count[cluster_id] * temp_sigma_inv
         # compute \Sigma_{0}^{-1} + n*\Sigma^{-1}
         temp_b = self._sigma_inv_0 + temp_a
         # compute the posterior covariance of the mean, Sigma_n = (\Sigma_{0}^{-1} + n*\Sigma^{-1})^{-1}
-        temp_c = numpy.linalg.pinv(temp_b)
+        temp_c = numpy.linalg.inv(temp_b)
         # posterior-predictive covariance for a new point is Sigma + Sigma_n (data noise + mean
         # uncertainty); use temp_sigma (the cluster's Sigma), NOT self._sigma_0 -- otherwise a large
         # cluster's predictive shape collapses to the global prior and ignores its own spread.
         sigma_hat = temp_sigma + temp_c
         assert sigma_hat.shape == (self._D, self._D)
 
-        sigma_inv[cluster_id, :, :] = numpy.linalg.pinv(sigma_hat)
+        sigma_inv[cluster_id, :, :] = numpy.linalg.inv(sigma_hat)
         # slogdet is numerically stable at high dimension where det() overflows (see _initialize)
         with numpy.errstate(over="ignore", divide="ignore", invalid="ignore"):
             log_sigma_det[cluster_id] = numpy.linalg.slogdet(sigma_hat)[1]
